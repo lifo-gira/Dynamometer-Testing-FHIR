@@ -516,6 +516,13 @@ async def change_password(data: ChangePasswordRequest):
             detail="Password update failed"
         )
 
+s3 = boto3.client(
+    "s3",
+    aws_access_key_id="AKIAQQ5O6E7YROLOVJGG",
+    aws_secret_access_key="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",
+    region_name="us-west-2",
+)
+
 @app.post("/upload-profile-photo")
 async def upload_profile_photo(
     email: str = Form(...),
