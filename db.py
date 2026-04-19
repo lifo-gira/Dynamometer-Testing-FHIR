@@ -1,14 +1,12 @@
 from motor import motor_asyncio
 from uuid import uuid4
-from datetime import datetime
 from typing import List, Dict, Optional
 from pydantic import BaseModel, EmailStr
 import pytz
 from datetime import datetime
-from uuid import uuid4
 from pytz import timezone
 from fastapi import HTTPException
-from models import PatientData, Therapist
+from models import ExerciseRecord, PatientData, Therapist
 
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -20,6 +18,8 @@ user_collection = database.User
 patient_data_collection = database.PatientData 
 therapist_data_collection = database.Therapist
 test_data_collection = database.Reports
+
+testing_data = database.TestCollection
 
 license = motor_asyncio.AsyncIOMotorClient("mongodb+srv://Ronald:Ronaldshaw068@cluster0.2w6n7hi.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 database2 = license.production
@@ -306,148 +306,148 @@ def generate_fhir_therapist_bundle(therapist: Therapist) -> dict:
 
 #     return bundle
 
-def generate_fhir_exercise_bundle(user_id: str, patient_uuid: str, exercise_records: list, include_patient: bool = True) -> dict:
-    now = datetime.now(IST).replace(microsecond=0).isoformat()
-    patient_ref = f"urn:uuid:{patient_uuid}"
+# def generate_fhir_exercise_bundle(user_id: str, patient_uuid: str, exercise_records: list, include_patient: bool = True) -> dict:
+#     now = datetime.now(IST).replace(microsecond=0).isoformat()
+#     patient_ref = f"urn:uuid:{patient_uuid}"
 
-    bundle = {
-        "resourceType": "Bundle",
-        "type": "collection",
-        "entry": []
-    }
+#     bundle = {
+#         "resourceType": "Bundle",
+#         "type": "collection",
+#         "entry": []
+#     }
 
-    if include_patient:
-        # Add Patient Resource
-        bundle["entry"].append({
-            "fullUrl": patient_ref,
-            "resource": {
-                "resourceType": "Patient",
-                "id": patient_uuid,
-                "text": {
-                    "status": "generated",
-                    "div": f"<div xmlns=\"http://www.w3.org/1999/xhtml\">Patient reference for user ID {user_id}</div>"
-                }
-            }
-        })
+#     if include_patient:
+#         # Add Patient Resource
+#         bundle["entry"].append({
+#             "fullUrl": patient_ref,
+#             "resource": {
+#                 "resourceType": "Patient",
+#                 "id": patient_uuid,
+#                 "text": {
+#                     "status": "generated",
+#                     "div": f"<div xmlns=\"http://www.w3.org/1999/xhtml\">Patient reference for user ID {user_id}</div>"
+#                 }
+#             }
+#         })
 
-        # Add User ID Observation
-        user_id_obs_id = str(uuid4())
-        bundle["entry"].append({
-            "fullUrl": f"urn:uuid:{user_id_obs_id}",
-            "resource": {
-                "resourceType": "Observation",
-                "id": user_id_obs_id,
-                "text": {
-                    "status": "generated",
-                    "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">User ID Observation</div>"
-                },
-                "status": "final",
-                "code": {"text": "User Id"},
-                "subject": {"reference": patient_ref},
-                "effectiveDateTime": now,
-                "performer": [{"display": "System Auto"}],
-                "valueString": user_id
-            }
-        })
+#         # Add User ID Observation
+#         user_id_obs_id = str(uuid4())
+#         bundle["entry"].append({
+#             "fullUrl": f"urn:uuid:{user_id_obs_id}",
+#             "resource": {
+#                 "resourceType": "Observation",
+#                 "id": user_id_obs_id,
+#                 "text": {
+#                     "status": "generated",
+#                     "div": "<div xmlns=\"http://www.w3.org/1999/xhtml\">User ID Observation</div>"
+#                 },
+#                 "status": "final",
+#                 "code": {"text": "User Id"},
+#                 "subject": {"reference": patient_ref},
+#                 "effectiveDateTime": now,
+#                 "performer": [{"display": "System Auto"}],
+#                 "valueString": user_id
+#             }
+#         })
 
-    # Add each exercise test (numbered)
-    for idx, record in enumerate(exercise_records):
-        test_number = idx + 1
-        device_name = record["device_name"]
-        record_date = record["date"]
-        record_date_obj = datetime.strptime(record_date, "%d-%m-%Y")
-        record_date_iso = record_date_obj.date().isoformat()
-        reps = record["individual_reps"]
+#     # Add each exercise test (numbered)
+#     for idx, record in enumerate(exercise_records):
+#         test_number = idx + 1
+#         device_name = record["device_name"]
+#         record_date = record["date"]
+#         record_date_obj = datetime.strptime(record_date, "%d-%m-%Y")
+#         record_date_iso = record_date_obj.date().isoformat()
+#         reps = record["individual_reps"]
 
-        all_observation_refs = []
+#         all_observation_refs = []
 
-        for rep_label, muscles in reps.items():
-            for muscle, values in muscles.items():
-                for i, value in enumerate(values):
-                    obs_id = str(uuid4())
+#         for rep_label, muscles in reps.items():
+#             for muscle, values in muscles.items():
+#                 for i, value in enumerate(values):
+#                     obs_id = str(uuid4())
 
-                    observation = {
-                        "resourceType": "Observation",
-                        "id": obs_id,
-                        "status": "final",
-                        "code": {
-                            "text": f"{device_name} - {muscle} - {rep_label}"
-                        },
-                        "subject": {
-                            "reference": patient_ref
-                        },
-                        "effectiveDateTime": f"{record_date_iso}T00:00:00+05:30",
-                        "performer": [{"display": "System Auto"}],
-                        "valueQuantity": {
-                            "value": value,
-                            "unit": "kgf",
-                            "system": "http://unitsofmeasure.org",
-                            "code": "kgf"
-                        },
-                        "component": [
-                            {
-                                "code": {"text": "Muscle Group"},
-                                "valueCodeableConcept": {"text": muscle}
-                            },
-                            {
-                                "code": {"text": "Rep Label"},
-                                "valueString": rep_label
-                            },
-                            {
-                                "code": {"text": "Device Used"},
-                                "valueString": device_name
-                            },
-                            {
-                                "code": {"text": "Value Index"},
-                                "valueInteger": i + 1
-                            }
-                        ],
-                        "text": {
-                            "status": "generated",
-                            "div": f"<div xmlns=\"http://www.w3.org/1999/xhtml\">{device_name} - {rep_label} - {muscle} - Value {i + 1}</div>"
-                        }
-                    }
+#                     observation = {
+#                         "resourceType": "Observation",
+#                         "id": obs_id,
+#                         "status": "final",
+#                         "code": {
+#                             "text": f"{device_name} - {muscle} - {rep_label}"
+#                         },
+#                         "subject": {
+#                             "reference": patient_ref
+#                         },
+#                         "effectiveDateTime": f"{record_date_iso}T00:00:00+05:30",
+#                         "performer": [{"display": "System Auto"}],
+#                         "valueQuantity": {
+#                             "value": value,
+#                             "unit": "kgf",
+#                             "system": "http://unitsofmeasure.org",
+#                             "code": "kgf"
+#                         },
+#                         "component": [
+#                             {
+#                                 "code": {"text": "Muscle Group"},
+#                                 "valueCodeableConcept": {"text": muscle}
+#                             },
+#                             {
+#                                 "code": {"text": "Rep Label"},
+#                                 "valueString": rep_label
+#                             },
+#                             {
+#                                 "code": {"text": "Device Used"},
+#                                 "valueString": device_name
+#                             },
+#                             {
+#                                 "code": {"text": "Value Index"},
+#                                 "valueInteger": i + 1
+#                             }
+#                         ],
+#                         "text": {
+#                             "status": "generated",
+#                             "div": f"<div xmlns=\"http://www.w3.org/1999/xhtml\">{device_name} - {rep_label} - {muscle} - Value {i + 1}</div>"
+#                         }
+#                     }
 
-                    bundle["entry"].append({
-                        "fullUrl": f"urn:uuid:{obs_id}",
-                        "resource": observation
-                    })
-                    all_observation_refs.append({"reference": f"urn:uuid:{obs_id}"})
+#                     bundle["entry"].append({
+#                         "fullUrl": f"urn:uuid:{obs_id}",
+#                         "resource": observation
+#                     })
+#                     all_observation_refs.append({"reference": f"urn:uuid:{obs_id}"})
 
-        # Create DiagnosticReport
-        diag_id = str(uuid4())
-        diagnostic_report = {
-            "resourceType": "DiagnosticReport",
-            "id": diag_id,
-            "status": "final",
-            "code": {
-                "text": f"Test {test_number} - {device_name} Exercise Test Report"
-            },
-            "subject": {
-                "reference": patient_ref
-            },
-            "effectiveDateTime": f"{record_date_iso}T00:00:00+05:30",
-            "issued": now,
-            "result": all_observation_refs,
-            "performer": [{"display": "System Auto"}],
-            "text": {
-                "status": "generated",
-                "div": f"<div xmlns=\"http://www.w3.org/1999/xhtml\">Full Exercise Report for {device_name} (Test {test_number})</div>"
-            },
-            "identifier": [
-                {
-                    "system": "http://yourdomain.org/test-id",
-                    "value": f"Test-{test_number}"
-                }
-            ]
-        }
+#         # Create DiagnosticReport
+#         diag_id = str(uuid4())
+#         diagnostic_report = {
+#             "resourceType": "DiagnosticReport",
+#             "id": diag_id,
+#             "status": "final",
+#             "code": {
+#                 "text": f"Test {test_number} - {device_name} Exercise Test Report"
+#             },
+#             "subject": {
+#                 "reference": patient_ref
+#             },
+#             "effectiveDateTime": f"{record_date_iso}T00:00:00+05:30",
+#             "issued": now,
+#             "result": all_observation_refs,
+#             "performer": [{"display": "System Auto"}],
+#             "text": {
+#                 "status": "generated",
+#                 "div": f"<div xmlns=\"http://www.w3.org/1999/xhtml\">Full Exercise Report for {device_name} (Test {test_number})</div>"
+#             },
+#             "identifier": [
+#                 {
+#                     "system": "http://yourdomain.org/test-id",
+#                     "value": f"Test-{test_number}"
+#                 }
+#             ]
+#         }
 
-        bundle["entry"].append({
-            "fullUrl": f"urn:uuid:{diag_id}",
-            "resource": diagnostic_report
-        })
+#         bundle["entry"].append({
+#             "fullUrl": f"urn:uuid:{diag_id}",
+#             "resource": diagnostic_report
+#         })
 
-    return bundle
+#     return bundle
 
 
 async def get_user_ids_for_therapist(therapist_email: str):
@@ -473,3 +473,43 @@ async def get_user_ids_for_therapist(therapist_email: str):
             user_ids.append(user_id)
 
     return user_ids
+
+def generate_minimal_fhir_upload(record: ExerciseRecord) -> dict:
+    # Use your IST variable here
+    now_iso = datetime.now(IST).isoformat()
+    
+    observation_id = str(uuid4())
+    
+    observation = {
+        "resourceType": "Observation",
+        "id": observation_id,
+        "status": "final",
+        "code": {"text": record.device_name},
+        "subject": {"reference": f"Patient/{record.user_id}"},
+        "effectiveDateTime": record.date,
+        "issued": now_iso,               # 👈 Stored in Asia/Kolkata time
+        "component": [
+            {
+                "code": {"text": f"{muscle}|{rep}"},
+                "valueString": ",".join(map(str, values))
+            }
+            for rep, muscles in record.individual_reps.items()
+            for muscle, values in muscles.items()
+        ]
+    }
+
+    return {
+        "resourceType": "Bundle",
+        "type": "transaction",
+        "entry": [
+            {
+                "fullUrl": f"urn:uuid:{observation_id}",
+                "resource": observation,
+                "request": {
+                    "method": "POST",
+                    "url": "Observation"
+                }
+            }
+        ]
+    }
+

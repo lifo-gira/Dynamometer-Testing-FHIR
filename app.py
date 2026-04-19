@@ -1,14 +1,16 @@
+from collections import defaultdict
 from typing import Dict, List
 from uuid import uuid4
 import uuid
 import boto3
 from bson import ObjectId
-from fastapi import  Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import  BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
-from db import generate_fhir_exercise_bundle, generate_fhir_patient_bundle, generate_fhir_therapist_bundle, get_user_ids_for_therapist, user_collection,patient_data_collection,test_data_collection, therapist_data_collection, devices, logging
+import pytz
+from db import testing_data, generate_fhir_patient_bundle, generate_fhir_therapist_bundle, generate_minimal_fhir_upload, get_user_ids_for_therapist, user_collection,patient_data_collection,test_data_collection, therapist_data_collection, devices, logging
 from datetime import datetime
 
 from models import ChangePasswordRequest, DeviceLogEntryQuery, ExerciseRecord, LoginRequest, PatientData, Therapist, TherapistPatientStats, User
@@ -201,114 +203,114 @@ async def export_patient_bundle(email: str):
 
     return JSONResponse(content=bundle, media_type="application/fhir+json")
 
-@app.post("/upload-exercise/")
-async def upload_exercise(email: str, first_name: str, last_name: str, exerciseRecord: List[ExerciseRecord]):
-    # Step 1: Look up the patient in `patient_data_collection`
-    patient_record = await patient_data_collection.find_one({
-    "$and": [
-        {
-            "entry": {
-                "$elemMatch": {
-                    "resource.resourceType": "Observation",
-                    "resource.code.text": "Email",
-                    "resource.valueString": email
-                }
-            }
-        },
-        {
-            "entry": {
-                "$elemMatch": {
-                    "resource.resourceType": "Patient",
-                    "resource.name.0.given.0": first_name,
-                    "resource.name.0.family": last_name
-                }
-            }
-        }
-    ]
-})
+# @app.post("/upload-exercise/")
+# async def upload_exercise(email: str, first_name: str, last_name: str, exerciseRecord: List[ExerciseRecord]):
+#     # Step 1: Look up the patient in `patient_data_collection`
+#     patient_record = await patient_data_collection.find_one({
+#     "$and": [
+#         {
+#             "entry": {
+#                 "$elemMatch": {
+#                     "resource.resourceType": "Observation",
+#                     "resource.code.text": "Email",
+#                     "resource.valueString": email
+#                 }
+#             }
+#         },
+#         {
+#             "entry": {
+#                 "$elemMatch": {
+#                     "resource.resourceType": "Patient",
+#                     "resource.name.0.given.0": first_name,
+#                     "resource.name.0.family": last_name
+#                 }
+#             }
+#         }
+#     ]
+# })
 
 
-    if not patient_record:
-        raise HTTPException(status_code=404, detail="Patient not found in patient_data_collection")
+#     if not patient_record:
+#         raise HTTPException(status_code=404, detail="Patient not found in patient_data_collection")
 
-    # Step 2: Extract user_id and patient UUID
-    user_id = None
-    patient_uuid = None
+#     # Step 2: Extract user_id and patient UUID
+#     user_id = None
+#     patient_uuid = None
 
-    for entry in patient_record["entry"]:
-        resource = entry.get("resource", {})
-        if resource.get("resourceType") == "Observation" and resource.get("code", {}).get("text") == "User Id":
-            user_id = resource.get("valueString")
-        if resource.get("resourceType") == "Patient":
-            patient_uuid = resource.get("id")
+#     for entry in patient_record["entry"]:
+#         resource = entry.get("resource", {})
+#         if resource.get("resourceType") == "Observation" and resource.get("code", {}).get("text") == "User Id":
+#             user_id = resource.get("valueString")
+#         if resource.get("resourceType") == "Patient":
+#             patient_uuid = resource.get("id")
 
-    if not user_id or not patient_uuid:
-        raise HTTPException(status_code=500, detail="User ID or Patient ID not found in patient record")
+#     if not user_id or not patient_uuid:
+#         raise HTTPException(status_code=500, detail="User ID or Patient ID not found in patient record")
 
-    # Step 3: Check if there's an existing exercise bundle in `test_data_collection` for this user
-    exercise_bundle = await test_data_collection.find_one({
-        "entry": {
-            "$elemMatch": {
-                "resource.resourceType": "Observation",
-                "resource.code.text": "User Id",
-                "resource.valueString": user_id
-            }
-        }
-    })
+#     # Step 3: Check if there's an existing exercise bundle in `test_data_collection` for this user
+#     exercise_bundle = await test_data_collection.find_one({
+#         "entry": {
+#             "$elemMatch": {
+#                 "resource.resourceType": "Observation",
+#                 "resource.code.text": "User Id",
+#                 "resource.valueString": user_id
+#             }
+#         }
+#     })
 
-    # Step 4: Generate new exercise observations only (no patient or user_id entry)
-    new_exercise_bundle = generate_fhir_exercise_bundle(
-        user_id=user_id,
-        patient_uuid=patient_uuid,
-        exercise_records=[record.dict() for record in exerciseRecord],
-        include_patient=False  # ⚠️ New flag, defined below
-    )
+#     # Step 4: Generate new exercise observations only (no patient or user_id entry)
+#     new_exercise_bundle = generate_fhir_exercise_bundle(
+#         user_id=user_id,
+#         patient_uuid=patient_uuid,
+#         exercise_records=[record.dict() for record in exerciseRecord],
+#         include_patient=False  # ⚠️ New flag, defined below
+#     )
 
-    if exercise_bundle:
-        # ✅ Append new exercise observations to existing document
-        new_observations = new_exercise_bundle["entry"]
-        await test_data_collection.update_one(
-            {"_id": exercise_bundle["_id"]},
-            {"$push": {"entry": {"$each": new_observations}}}
-        )
-        return {
-            "message": "Exercise data added to existing test_data_collection bundle",
-            "user_id": user_id
-        }
+#     if exercise_bundle:
+#         # ✅ Append new exercise observations to existing document
+#         new_observations = new_exercise_bundle["entry"]
+#         await test_data_collection.update_one(
+#             {"_id": exercise_bundle["_id"]},
+#             {"$push": {"entry": {"$each": new_observations}}}
+#         )
+#         return {
+#             "message": "Exercise data added to existing test_data_collection bundle",
+#             "user_id": user_id
+#         }
 
-    else:
-        # ❌ No previous exercise bundle, create new one (include patient + user ID)
-        full_bundle = generate_fhir_exercise_bundle(
-            user_id=user_id,
-            patient_uuid=patient_uuid,
-            exercise_records=[record.dict() for record in exerciseRecord],
-            include_patient=True
-        )
+#     else:
+#         # ❌ No previous exercise bundle, create new one (include patient + user ID)
+#         full_bundle = generate_fhir_exercise_bundle(
+#             user_id=user_id,
+#             patient_uuid=patient_uuid,
+#             exercise_records=[record.dict() for record in exerciseRecord],
+#             include_patient=True
+#         )
 
-        result = await test_data_collection.insert_one(full_bundle)
+#         result = await test_data_collection.insert_one(full_bundle)
 
-        # Step 5: Update Flag to 1 in patient_data_collection
-        await patient_data_collection.update_one(
-            {
-                "_id": patient_record["_id"],
-                "entry.resource.code.text": "Flag"
-            },
-            {
-                "$set": {
-                    "entry.$[flagEntry].resource.valueString": "1"
-                }
-            },
-            array_filters=[
-                {"flagEntry.resource.code.text": "Flag"}
-            ]
-        )
+#         # Step 5: Update Flag to 1 in patient_data_collection
+#         await patient_data_collection.update_one(
+#             {
+#                 "_id": patient_record["_id"],
+#                 "entry.resource.code.text": "Flag"
+#             },
+#             {
+#                 "$set": {
+#                     "entry.$[flagEntry].resource.valueString": "1"
+#                 }
+#             },
+#             array_filters=[
+#                 {"flagEntry.resource.code.text": "Flag"}
+#             ]
+#         )
 
 
-        return {
-            "message": "New exercise bundle created in test_data_collection",
-            "user_id": user_id,
-            "bundle_id": str(result.inserted_id)
-        }
+#         return {
+#             "message": "New exercise bundle created in test_data_collection",
+#             "user_id": user_id,
+#             "bundle_id": str(result.inserted_id)
+#         }
     
 @app.get("/get-exercise-bundles/{user_id}")
 async def get_exercise_bundles(user_id: str):
@@ -599,3 +601,391 @@ async def get_therapist_profile_image(email: str):
         raise HTTPException(status_code=404, detail="Profile image not found")
 
     return {"email": email, "profile_image_url": photo_url}
+
+@app.post("/upload-exercise-test")
+async def upload_exercise(email: str, first_name: str, last_name: str, record: ExerciseRecord):
+    try:
+        # 1. Look up the patient in patient_data_collection
+        patient_record = await patient_data_collection.find_one({
+            "$and": [
+                {
+                    "entry": {
+                        "$elemMatch": {
+                            "resource.resourceType": "Observation",
+                            "resource.code.text": "Email",
+                            "resource.valueString": email
+                        }
+                    }
+                },
+                {
+                    "entry": {
+                        "$elemMatch": {
+                            "resource.resourceType": "Patient",
+                            "resource.name.0.given.0": first_name,
+                            "resource.name.0.family": last_name
+                        }
+                    }
+                }
+            ]
+        })
+
+        if not patient_record:
+            raise HTTPException(status_code=404, detail="Patient not found")
+
+        # 2. Extract IDs
+        user_id = None
+        patient_uuid = None
+        for entry in patient_record["entry"]:
+            res = entry.get("resource", {})
+            if res.get("resourceType") == "Observation" and res.get("code", {}).get("text") == "User Id":
+                user_id = res.get("valueString")
+            if res.get("resourceType") == "Patient":
+                patient_uuid = res.get("id")
+
+        if not user_id or not patient_uuid:
+            raise HTTPException(status_code=500, detail="Incomplete patient profile (Missing IDs)")
+
+        # 3. Generate the new FHIR entries from the record
+        temp_bundle = generate_minimal_fhir_upload(record)
+        new_entries = temp_bundle["entry"]
+
+        # 4. ALWAYS Create a NEW standalone bundle
+        # Include the User Id header and the actual exercise observations
+        user_id_entry = {
+            "resource": {
+                "resourceType": "Observation",
+                "status": "final",
+                "code": {"text": "User Id"},
+                "valueString": user_id,
+                "subject": {"reference": f"Patient/{patient_uuid}"}
+            }
+        }
+        
+        full_bundle = {
+            "resourceType": "Bundle",
+            "type": "transaction",
+            "entry": [user_id_entry] + new_entries
+        }
+
+        # Per your requirement: Always insert_one, never update existing
+        result = await testing_data.insert_one(full_bundle)
+
+        # 5. Update Flag to "1" in patient_data_collection
+        await patient_data_collection.update_one(
+            {
+                "_id": patient_record["_id"],
+                "entry.resource.code.text": "Flag"
+            },
+            {"$set": {"entry.$[flagEntry].resource.valueString": "1"}},
+            array_filters=[{"flagEntry.resource.code.text": "Flag"}]
+        )
+
+        return {
+            "status": "success",
+            "message": "New exercise bundle created",
+            "user_id": user_id,
+            "db_id": str(result.inserted_id)
+        }
+
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@app.get("/fetch-user-data/{user_id}")
+async def fetch_user_data(user_id: str):
+    try:
+        # Search for the user in the FHIR nested structure
+        # user_id here is the Patient UUID (e.g., 5c0dce66...)
+        query = {"entry.resource.subject.reference": f"Patient/{user_id}"}
+        
+        # Sort by the 'issued' time of the exercise observation
+        cursor = testing_data.find(query).sort("entry.resource.issued", -1)
+        documents = await cursor.to_list(length=100)
+
+        if not documents:
+            return {"message": "No data found", "data": []}
+
+        history = []
+        for doc in documents:
+            # We skip the 'User Id' header and look for the actual exercise Observation
+            for entry in doc.get("entry", []):
+                obs = entry.get("resource", {})
+                
+                # Skip the metadata observation, only process the sensor data
+                if obs.get("code", {}).get("text") == "User Id":
+                    continue
+                
+                # Extract the sensor data
+                history.append({
+                    "device": obs.get("code", {}).get("text", "Unknown Device"),
+                    "exercise_date": obs.get("effectiveDateTime"),
+                    "uploaded_at": obs.get("issued"),
+                    "metrics": {
+                        comp["code"]["text"]: [float(x) for x in comp["valueString"].split(",")]
+                        for comp in obs.get("component", [])
+                    }
+                })
+
+        return {"user_id": user_id, "history": history}
+
+    except Exception as e:
+        print(f"Fetch Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+IST = pytz.timezone('Asia/Kolkata')
+
+# --- Core Logic: Parsing (Mirroring Java logic) ---
+def parse_bundle_to_multiple_records(bundle_doc: dict) -> List[ExerciseRecord]:
+    entries = bundle_doc.get("entry", [])
+    resource_map = {}
+    diagnostic_reports = []
+    user_id = "unknown"
+
+    # Map resources and find individual tests (DiagnosticReports)
+    for entry in entries:
+        res = entry.get("resource", {})
+        res_id = res.get("id", "")
+        resource_map[f"urn:uuid:{res_id}"] = res
+        
+        if res.get("resourceType") == "DiagnosticReport":
+            diagnostic_reports.append(res)
+        elif res.get("code", {}).get("text") == "User Id":
+            user_id = res.get("valueString", "unknown")
+
+    test_records = []
+
+    for report in diagnostic_reports:
+        date = report.get("issued", "Unknown")
+        code_text = report.get("code", {}).get("text", "Unknown")
+        device_name = code_text.replace("Test 1 - ", "").replace(" Exercise Test Report", "")
+        
+        result_refs = report.get("result", [])
+        individual_reps = {}
+        unique_muscles = set()
+
+        for ref_obj in result_refs:
+            ref_url = ref_obj.get("reference")
+            obs = resource_map.get(ref_url)
+
+            if not obs or "component" not in obs:
+                continue
+
+            muscle, rep, val_index = "", "", 0
+
+            for comp in obs.get("component", []):
+                label = comp.get("code", {}).get("text", "")
+                if label.lower() == "muscle group":
+                    muscle = comp.get("valueCodeableConcept", {}).get("text", "")
+                elif label.lower() == "rep label":
+                    rep = comp.get("valueString", "")
+                elif label.lower() == "value index":
+                    val_index = comp.get("valueInteger", 0)
+
+            if not muscle or not rep or val_index == 0:
+                continue
+
+            unique_muscles.add(muscle)
+            raw_value = obs.get("valueQuantity", {}).get("value", 0.0)
+
+            if rep not in individual_reps: individual_reps[rep] = {}
+            if muscle not in individual_reps[rep]: individual_reps[rep][muscle] = []
+
+            target_list = individual_reps[rep][muscle]
+            while len(target_list) < val_index:
+                target_list.append(0.0)
+            
+            target_list[val_index - 1] = float(raw_value)
+
+        test_records.append(ExerciseRecord(
+            user_id=user_id,
+            total_muscles=len(unique_muscles),
+            device_name=device_name,
+            date=date,
+            individual_reps=individual_reps
+        ))
+
+    return test_records
+
+# --- Background Task ---
+async def run_single_index_migration(target_index: int):
+    try:
+        # 0. Fetch the legacy document
+        cursor = test_data_collection.find().skip(target_index - 1).limit(1)
+        docs = await cursor.to_list(length=1)
+        
+        if not docs:
+            print(f"Index {target_index} not found.")
+            return
+
+        # 1. Split the bundle into individual ExerciseRecord objects
+        test_records = parse_bundle_to_multiple_records(docs[0])
+        if not test_records:
+            return
+
+        # 2. User ID Logic: Lookup the patient to get the internal UUID
+        # (Assuming all records in this legacy bundle belong to the same user)
+        user_id = test_records[0].user_id
+        patient_record = await patient_data_collection.find_one({
+            "entry": {
+                "$elemMatch": {
+                    "resource.resourceType": "Observation",
+                    "resource.code.text": "User Id",
+                    "resource.valueString": user_id
+                }
+            }
+        })
+
+        if not patient_record:
+            print(f"Migration Error: Patient '{user_id}' not found. Skipping.")
+            return
+
+        # Extract patient_uuid for the subject reference
+        patient_uuid = None
+        for entry in patient_record.get("entry", []):
+            res = entry.get("resource", {})
+            if res.get("resourceType") == "Patient":
+                patient_uuid = res.get("id")
+                break
+
+        # 3. For each test record, generate a NEW standalone FHIR Bundle
+        for record in test_records:
+            # Generate the observation entries from the record
+            temp_bundle = generate_minimal_fhir_upload(record)
+            new_entries = temp_bundle["entry"]
+
+            # Define the required User Id header observation for this specific test document
+            user_id_entry = {
+                "resource": {
+                    "resourceType": "Observation",
+                    "status": "final",
+                    "code": {"text": "User Id"},
+                    "valueString": user_id,
+                    "subject": {"reference": f"Patient/{patient_uuid}"}
+                }
+            }
+            
+            # Combine into a single new Bundle document
+            full_bundle = {
+                "resourceType": "Bundle",
+                "type": "transaction",
+                "entry": [user_id_entry] + new_entries
+            }
+
+            # Insert as a new document (Every test creates a new doc)
+            await testing_data.insert_one(full_bundle)
+        
+        # 4. Update Flag to "1" in patient_data_collection (Logic from your Upload API)
+        await patient_data_collection.update_one(
+            {
+                "_id": patient_record["_id"],
+                "entry.resource.code.text": "Flag"
+            },
+            {"$set": {"entry.$[flagEntry].resource.valueString": "1"}},
+            array_filters=[{"flagEntry.resource.code.text": "Flag"}]
+        )
+
+        print(f"Successfully migrated index {target_index}. Saved {len(test_records)} individual test bundles for {user_id}.")
+
+    except Exception as e:
+        print(f"Error during migration: {str(e)}")
+
+# --- API Endpoint ---
+@app.post("/convert-single-record/{target}")
+async def start_conversion(target: int, background_tasks: BackgroundTasks):
+    """
+    Triggers migration for the document index specified in the URL.
+    """
+    # The value you type in the Swagger text box is passed here
+    background_tasks.add_task(run_single_index_migration, target)
+    
+    return {
+        "status": "Migration Queued", 
+        "target_index": target
+    }
+
+@app.get("/therapist/{therapist_email}/all-patients-exercise-data")
+async def get_all_patients_exercise_data(therapist_email: str):
+    try:
+        # Step 1: Find all patient profiles assigned to this therapist (1 Query)
+        patient_cursor = patient_data_collection.find({
+            "entry": {
+                "$elemMatch": {
+                    "resource.resourceType": "Observation",
+                    "resource.code.text": "Therapist Assigned",
+                    "resource.valueString": therapist_email
+                }
+            }
+        })
+        
+        assigned_patients = await patient_cursor.to_list(length=None)
+        
+        if not assigned_patients:
+            return JSONResponse(content={"message": "No patients found for this therapist", "data": []})
+
+        # Step 2: Extract User Ids into a list
+        user_ids = []
+        for patient in assigned_patients:
+            for entry in patient.get("entry", []):
+                resource = entry.get("resource", {})
+                if resource.get("resourceType") == "Observation" and resource.get("code", {}).get("text") == "User Id":
+                    user_ids.append(resource.get("valueString"))
+                    break
+
+        if not user_ids:
+            return JSONResponse(content={"therapist_email": therapist_email, "data": []})
+
+        # Step 3: BATCH FETCH - Get ALL exercise data for ALL users in ONE query
+        exercise_cursor = testing_data.find({
+            "entry": {
+                "$elemMatch": {
+                    "resource.resourceType": "Observation",
+                    "resource.code.text": "User Id",
+                    "resource.valueString": {"$in": user_ids}  # <--- The magic happens here
+                }
+            }
+        })
+        
+        all_patient_exercise_bundles = await exercise_cursor.to_list(length=None)
+
+        # Step 4: DATA STRUCTURE - Group data in-memory using a Hash Map (Dictionary)
+        # defaultdict(list) creates a new list automatically if a key doesn't exist yet
+        grouped_data = defaultdict(list)
+        
+        for bundle in all_patient_exercise_bundles:
+            # Fix ObjectId for JSON serialization
+            if "_id" in bundle:
+                bundle["_id"] = str(bundle["_id"])
+                
+            # Extract the user_id from this specific bundle to use as the dictionary key
+            bundle_user_id = None
+            for entry in bundle.get("entry", []):
+                res = entry.get("resource", {})
+                if res.get("resourceType") == "Observation" and res.get("code", {}).get("text") == "User Id":
+                    bundle_user_id = res.get("valueString")
+                    break
+            
+            # Map the bundle to the correct user in O(1) time
+            if bundle_user_id:
+                grouped_data[bundle_user_id].append(bundle)
+
+        # Step 5: Format the final response
+        final_response_data = []
+        for user_id in user_ids:
+            # If a user has no data, grouped_data[user_id] will safely return an empty []
+            user_bundles = grouped_data[user_id] 
+            final_response_data.append({
+                "user_id": user_id,
+                "total_records": len(user_bundles),
+                "exercise_data": user_bundles
+            })
+
+        return JSONResponse(content={
+            "therapist_email": therapist_email,
+            "data": final_response_data
+        })
+
+    except Exception as e:
+        print(f"Error fetching aggregated patient data: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error while fetching patient data")
